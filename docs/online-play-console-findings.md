@@ -320,3 +320,28 @@ How the kit was made (no full kit rebuild; only a PE module changed):
 The kit, the DLLs and the container scripts are kept locally in `build/dev-kits/playden-kit-0.13-iphlpapi-nsi/`
 (ignored by git). This is a development kit: it is not published, and the prospero-win commit exists only in the
 local submodule until it is pushed and released.
+
+## Palworld: official servers time out (2026-10-25)
+
+Joining a server from Palworld's Official Servers list ends in "Connection timed out. Either the destination server
+is down, or its IP address has changed."
+
+- Steam is fine: the bridge hands out session tickets and Steam reports them accepted for the server
+  (`ticket auth complete ... response=0`). The join goes straight to the server over UDP, not through Steam's relays.
+- The Network trace (session log in `/data/playden/games/steam-1623730/library/logs/`, read after
+  `SITE CHMOD` of the 0700 folders, restored afterwards) shows the game's UDP socket send 47 packets and receive
+  162 in its first second. For the next 15 seconds the game sends about 8 packets a second and receives none, then
+  closes the socket.
+- From the moment the connection starts, the game thread calls `NotifyAddrChange` twice a second.
+  `NsiRequestChangeNotificationEx` needs `\\.\Nsi`, which the console doesn't have, so every request fails at once
+  and the game asks again. On Windows the request stays pending while nothing changes. The guess, not proven: the
+  game takes the failures as network changes and resets its side of the connection.
+
+Kit change: prospero-win patch `0991-nsi-ps5-keep-change-requests-pending-without-nsi` (commit `95754ef`). Without
+the device, an asynchronous request stays pending (`ERROR_IO_PENDING`, the handle an event that is never
+signaled) and `NsiCancelChangeNotification` completes it as cancelled. `nsi` joins `PE_MODULES` in
+`tools/build_wine_ps5.sh`.
+
+The development kit is the 0990 kit with the two `lib/wine/*/nsi.dll` replaced (built in the patched host tree,
+`strip -s`), inventory and manifest updated the same way (manifest `6e2fe782...`, files `264262d3...`). Kept in
+`build/dev-kits/playden-kit-0.13-nsi-notify/`. Not yet tested on the console.
