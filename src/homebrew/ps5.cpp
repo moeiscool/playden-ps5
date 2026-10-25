@@ -310,6 +310,9 @@ int main() {
         // only in this vault, which all five repositories below share.
         const bool stay_signed_in = playden::PreferencesStore(auth_storage).Load().preferences.steam_stay_signed_in;
         playden::SessionVault session_vault(stay_signed_in);
+        // Online games get the Steam session's token in their folder, unencrypted, only while the player keeps the
+        // session on disk anyway ("Stay signed in"); otherwise they get the emulator alone.
+        std::atomic<bool> session_saved(stay_signed_in);
         playden::LocalSessionRepository sessions(user_root, [](const std::string& diagnostic) {
             playden::app::AppendLogLine(log_root, "storage.log", diagnostic);
         }, &session_vault);
@@ -476,6 +479,13 @@ int main() {
                 return true;
             };
             config.runtime_dir = paths.title_root + "/runtime";
+            // Games set to "Steam features" = Online sign in with the account's refresh token (runtime/steamworks.h).
+            config.steam_refresh_token = [&sessions, &session_saved]() -> std::string {
+                if (!session_saved.load()) return {};
+                auto loaded = sessions.Load();
+                if (!loaded.ok() || !loaded.value()) return {};
+                return loaded.value()->refresh_token;
+            };
             config.settings_record = [file = settings_file](const playden::GameId& game) -> std::optional<rt::GameSettingsRecord> {
                 std::map<playden::GameId, rt::GameSettingsRecord> records; std::string reason;
                 if (!file || !rt::LoadGameSettingsFile(file->string(), &records, &reason)) return std::nullopt;
@@ -712,8 +722,9 @@ int main() {
         services.SetShutdownLog([](const std::string& line) { playden::app::AppendLogLine(log_root, "launch.log", line); });
         // "Saved UI data is unavailable" names no file or reason: the log does.
         services.SetPersistenceLog([](const std::string& line) { playden::app::AppendLogLine(log_root, "launch.log", line); });
-        services.SetStaySignedIn([&sessions](bool stay) {
+        services.SetStaySignedIn([&sessions, &session_saved](bool stay) {
             const auto moved = sessions.SetPersist(stay);
+            session_saved.store(stay);
             playden::app::AppendLogLine(log_root, "auth.log", std::string("stay signed in ") + (stay ? "on" : "off") +
                                                                   " moved=" + (moved.ok() ? "1" : "0"));
         });
