@@ -330,6 +330,7 @@ class Controller {
   bool SessionActive(GameId id) const;
   std::chrono::steady_clock::time_point volume_refreshed_at_{};
   std::optional<std::chrono::steady_clock::time_point> licenses_notice_at_;  // when a license check starts showing
+  std::optional<std::chrono::steady_clock::time_point> updates_checked_at_;  // the last update check asked for
   std::optional<GameId> requested_detail_;
   std::uint64_t requested_generation_ = 0;
   stores::SteamAccount* service_ = nullptr;  // Steam's account, in the registry; null once shut down
