@@ -2403,6 +2403,12 @@ static METHOD int8_t UserGetEncryptedAppTicket(void* self, void* buffer, int max
     LogValue("encrypted app ticket handed to the game bytes=", bytes);
     return 1;
   }
+  if (state == 2) {
+    /* Steam's ticket does not fit: say how big it is, as Steam does, so the game can ask again. */
+    if (size) *size = bytes;
+    LogValue("encrypted app ticket: the game's buffer is too small, max=", (uint64_t)(uint32_t)max);
+    return 0;
+  }
   LogValue("encrypted app ticket: gbe_fork's handed to the game, state=", (uint64_t)state);
   return ((GetEncryptedAppTicketFn)v->original[SlotGetEncrypted(v->version)])(self, buffer, max, size);
 }
