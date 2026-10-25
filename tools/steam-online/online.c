@@ -2378,9 +2378,12 @@ static METHOD uint64_t UserRequestEncryptedAppTicket(void* self, void* data, int
     Buf body = {0};
     PbUint(&body, 1, g_config.app_id);
     if (size) PbBytes(&body, 2, data, (size_t)size);
+    LogValue("encrypted app ticket requested, game data bytes=", (uint64_t)size);
     if (SendMessage(kEMsgClientRequestEncryptedAppTicket, &body) && !WaitUntil(EncryptedDone, 10000))
       Log("encrypted app ticket: no answer");
     BufFree(&body);
+  } else {
+    Log("encrypted app ticket: not requested from Steam; the game gets gbe_fork's");
   }
   return ((RequestEncryptedAppTicketFn)v->original[SlotRequestEncrypted(v->version)])(self, data, size);
 }
@@ -2393,8 +2396,14 @@ static METHOD int8_t UserGetEncryptedAppTicket(void* self, void* buffer, int max
     memcpy(buffer, g_encrypted, g_encrypted_size);
     if (size) *size = g_encrypted_size;
   }
+  const int state = g_encrypted_state;
+  const uint32_t bytes = g_encrypted_size;
   LeaveCriticalSection(&g_lock);
-  if (have) return 1;
+  if (have) {
+    LogValue("encrypted app ticket handed to the game bytes=", bytes);
+    return 1;
+  }
+  LogValue("encrypted app ticket: gbe_fork's handed to the game, state=", (uint64_t)state);
   return ((GetEncryptedAppTicketFn)v->original[SlotGetEncrypted(v->version)])(self, buffer, max, size);
 }
 
