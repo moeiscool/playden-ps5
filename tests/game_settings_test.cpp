@@ -182,6 +182,11 @@ int main(int argc, char** argv) {
   CHECK(profile.text.find("[debug]\nwinedebug = err+all,warn+all,+loaddll,+process,+rawinput,+dinput,+winmm,+ntoskrnl,+plugplay,+hid,+hidclass\n") !=
         std::string::npos);
   CHECK(CheckProsperoProfile(profile.text, &reason));
+  // Network logging traces sockets, name lookups and the network adapters.
+  CHECK(BuildEffectiveSettings(hl2, nullptr, {{"logging", "network"}}, KitCapabilities{}, &settings, &error));
+  CHECK(RenderProsperoProfile(hl2, settings, target, &profile, &reason));
+  CHECK(profile.text.find("[debug]\nwinedebug = err+all,+winsock,+dnsapi,+nsi,+iphlpapi,+winhttp\n") != std::string::npos);
+  CHECK(CheckProsperoProfile(profile.text, &reason));
   CHECK(BuildEffectiveSettings(hl2, nullptr, {{"extra_arguments", "-name \"John  Doe\""}}, KitCapabilities{},
                                &settings, &error));
   std::vector<std::string> spaced_arguments;
