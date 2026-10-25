@@ -345,3 +345,17 @@ signaled) and `NsiCancelChangeNotification` completes it as cancelled. `nsi` joi
 The development kit is the 0990 kit with the two `lib/wine/*/nsi.dll` replaced (built in the patched host tree,
 `strip -s`), inventory and manifest updated the same way (manifest `6e2fe782...`, files `264262d3...`). Kept in
 `build/dev-kits/playden-kit-0.13-nsi-notify/`. Not yet tested on the console.
+
+Result with 0991: still times out. `NotifyAddrChange` is still called twice a second and never cancelled, so the game
+polls it on a timer either way; that was not the cause. 0991 stays (it matches Windows).
+
+The second trace shows more of the join. On the game's socket (`SO_RCVBUF` 32768, non-blocking): the handshake, then
+3 seconds with no reads while the map loads, then 618 and 185 packets read in two bursts, then 13 seconds of reads at
+60 a second that get nothing while the game keeps sending, until the timeout. The server stops after the load.
+
+Next guess: the BSD stack drops what does not fit the 32 KiB buffer (counting each datagram's whole storage), so the
+server's replication data sent during the load is lost and the server gives up on the connection. prospero-win patch
+`0992-ws2_32-ps5-ask-for-a-larger-receive-buffer` (commit `8c24e97`): `setsockopt(SO_RCVBUF)` asks for at least
+1 MiB and keeps the game's size if refused; `ws2_32` joins `PE_MODULES`. Dev kit: the 0991 kit with the two
+`lib/wine/*/ws2_32.dll` replaced (manifest `9da51837...`, files `010873e9...`), in
+`build/dev-kits/playden-kit-0.13-rcvbuf/`.
