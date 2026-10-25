@@ -359,3 +359,25 @@ server's replication data sent during the load is lost and the server gives up o
 1 MiB and keeps the game's size if refused; `ws2_32` joins `PE_MODULES`. Dev kit: the 0991 kit with the two
 `lib/wine/*/ws2_32.dll` replaced (manifest `9da51837...`, files `010873e9...`), in
 `build/dev-kits/playden-kit-0.13-rcvbuf/`.
+
+Result with 0992: still times out. The game asked for 1 MiB, and the join read about 1,100 packets without loss
+before the server went quiet. The network was not the cause.
+
+## Resolved: Palworld joins official servers (2026-10-25)
+
+A Palworld dedicated server on the Linux PC named the cause: `kicked by AUTH. Error: Invalid AppTicket`. Palworld's
+servers check the encrypted app ticket. The official servers drop the player the same way, and the game shows it as
+a timeout.
+
+- The game first calls `GetEncryptedAppTicket` with a zero-size buffer to learn the size. The bridge treated a
+  too-small buffer like "no ticket" and passed the call to gbe_fork, so the game got gbe_fork's fake ticket. Fixed
+  in `4517260`: the bridge reports the size and returns false, as Steam does, and the game asks again (log:
+  `the game's buffer is too small, max=0`, then `handed to the game bytes=159`).
+- With it, joining a server from the Official Servers list works on the PS5.
+- The dedicated server on the LAN still kicks with "Invalid AppTicket", probably because it sees the console at a
+  LAN address and the ticket carries the public IP Steam saw. Not tested with a real Steam client on the LAN.
+- Testing trap: a dedicated server started from the Steam client on the same account counts as playing, and Steam
+  signs the bridge out (`logged off eresult=6`) within seconds of each sign-in. Its ticket requests then get no
+  answer. Start `PalServer.sh` directly.
+- Patches 0991 and 0992 were not needed. They match Windows behaviour and are harmless, but nothing here depends
+  on them.

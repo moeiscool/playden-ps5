@@ -30,7 +30,7 @@ When Steam can't be reached in time, tickets fall back to gbe_fork's and lobby c
 
 **On a PS5:** RuneScape: Dragonwilds (Redpoint EOS, Web API ticket for `epiconlineservices`) signs in to its online
 services: Steam validates the ticket (`ticket auth complete ... response=0`) and the game lists and creates lobbies.
-Co-op through Steam's relays is still untested (see Not done). How it got there, and the dead ends, are in
+Co-op through Steam's relays is still untested (see Not done). Palworld joins servers from its Official Servers list (it checks the encrypted app ticket). How it got there, and the dead ends, are in
 `online-play-console-findings.md`.
 
 ## Tickets
