@@ -507,6 +507,7 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
 
   stats.servers_ms = Milliseconds(Clock::now() - phase_start);
   phase_start = Clock::now();
+  CdnServerChoice server_choice(servers.size());
   trace("manifests");
   // Manifests, in mounting order.
   std::vector<DepotManifest> manifests(access.grants.size());
@@ -514,11 +515,15 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
     InstallError fetched = InstallError::kNetwork;
     bool network_failed = false;
     // A server that fails or sends a manifest that does not parse (a busy CDN can answer 502, or with a
-    // cut-off body) is followed by another, after 1, 2, 4 and 8 s, as for chunks.
+    // cut-off body) is followed by another, after 1, 2, 4 and 8 s, as for chunks. The failure counts
+    // against that server when chunks pick theirs; a manifest's speed is not sampled.
     const std::size_t attempts = std::min<std::size_t>(std::max<std::size_t>(servers.size() * 2, 4), 6);
+    std::size_t server = static_cast<std::size_t>(-1);
     for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
-      fetched = hooks_.manifest(servers[attempt % servers.size()], access.grants[index], cancel, &manifests[index]);
+      server = server_choice.Pick(server);
+      fetched = hooks_.manifest(servers[server], access.grants[index], cancel, &manifests[index]);
       if (fetched != InstallError::kNetwork && fetched != InstallError::kCorrupt) break;
+      server_choice.Failed(server);
       network_failed = network_failed || fetched == InstallError::kNetwork;
       if (hooks_.pause && attempt + 1 < attempts) hooks_.pause(1000 << std::min<std::size_t>(attempt, 3), cancel);
       if (cancel.load()) return fail(InstallError::kCanceled, "canceled");
@@ -876,7 +881,6 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
   ScopeExit joined{join_workers};
   ScopeExit close_journal{[&] { if (journal) std::fclose(journal); }};
   coordinator_cdn = hooks_.cdn_stats ? hooks_.cdn_stats() : CdnStats{};
-  CdnServerChoice server_choice(servers.size());
   workers_running = true;
   if (!chunks.empty()) trace("first-chunk");
   pthread_attr_t attr;

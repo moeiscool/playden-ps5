@@ -1014,9 +1014,11 @@ void BrokenManifestIsFetchedAgainElsewhere(const std::filesystem::path& root) {
   auto hooks = world.Hooks();
   const auto good = hooks.manifest;
   int calls = 0;
+  std::vector<std::string> hosts;
   hooks.manifest = [&](const ContentServer& server, const DepotGrant& grant, const std::atomic<bool>& cancel,
                        DepotManifest* out) {
     ++calls;
+    hosts.push_back(server.host);
     if (calls == 1) return InstallError::kNetwork;
     if (calls == 2) return InstallError::kCorrupt;
     return good(server, grant, cancel, out);
@@ -1028,6 +1030,8 @@ void BrokenManifestIsFetchedAgainElsewhere(const std::filesystem::path& root) {
   std::atomic<bool> cancel{false};
   CHECK(installer.Run({}, Target(root / "recovers"), cancel).error == InstallError::kNone);
   CHECK((waits == std::vector<int>{1000, 2000}));
+  // Each retry goes to another server than the one that just failed.
+  CHECK(hosts.size() >= 3 && hosts[0] != hosts[1] && hosts[1] != hosts[2]);
 
   // Never sent by one server and never readable from another: a network problem, not corrupt content.
   auto failing = world.Hooks();
