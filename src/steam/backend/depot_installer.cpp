@@ -1,5 +1,6 @@
 #include "steam/backend/depot_installer.h"
 
+#include "steam/backend/cdn_server_choice.h"
 #include "steam/backend/depot_chunk.h"
 #include "steam/backend/gzip.h"
 #include "steam/backend/json.h"
@@ -875,6 +876,7 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
   ScopeExit joined{join_workers};
   ScopeExit close_journal{[&] { if (journal) std::fclose(journal); }};
   coordinator_cdn = hooks_.cdn_stats ? hooks_.cdn_stats() : CdnStats{};
+  CdnServerChoice server_choice(servers.size());
   workers_running = true;
   if (!chunks.empty()) trace("first-chunk");
   pthread_attr_t attr;
@@ -896,7 +898,6 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
     self->run = [&, self] {
       // Destroy the HTTP client on the same thread that used it, after publishing its counters.
       ScopeExit release_fetcher{[self] { self->fetcher = {}; }};
-      std::size_t server_cursor = 0;
       Clock::duration fetch_time{}, process_time{}, backoff_time{};
       std::uint64_t retries = 0, corrupt_retries = 0;
 #if defined(__cpp_exceptions)
@@ -921,16 +922,19 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
           std::vector<std::uint8_t> plain;
           std::uint64_t compressed_bytes = 0;
           const auto attempts = static_cast<std::size_t>(kChunkAttempts) * std::min<std::size_t>(servers.size(), 2);
+          std::size_t server = static_cast<std::size_t>(-1);
           for (std::size_t attempt = 0; attempt < attempts && !stop.load(); ++attempt) {
             if (attempt > 0) ++retries;
+            server = server_choice.Pick(server);
             std::vector<std::uint8_t> encrypted;
+            const auto fetch_start = Clock::now();
             const auto fetched = Timed(fetch_time, [&] {
-              return self->fetcher.fetch(servers[server_cursor % servers.size()], grant.depot_id, Hex(chunk.sha),
+              return self->fetcher.fetch(servers[server], grant.depot_id, Hex(chunk.sha),
                                          static_cast<std::size_t>(chunk.compressed_size) + 4096, stop, &encrypted);
             });
             if (fetched == CdnError::kCanceled || stop.load()) { result = InstallError::kCanceled; break; }
             if (fetched != CdnError::kNone) {
-              ++server_cursor;
+              server_choice.Failed(server);
               result = InstallError::kNetwork;
               if (hooks_.pause && attempt + 1 < attempts)
                 Timed(backoff_time, [&] { hooks_.pause(1000 << std::min<std::size_t>(attempt, 3), stop); });
@@ -940,9 +944,11 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
               return ProcessDepotChunk(encrypted, grant.key, chunk.original_size, chunk.crc, chunk.sha, &plain);
             });
             if (processed == ChunkError::kNone) {
+              server_choice.Succeeded(server, encrypted.size(), static_cast<std::uint64_t>(
+                  std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - fetch_start).count()));
               compressed_bytes = encrypted.size(); result = InstallError::kNone; break;
             }
-            ++server_cursor;
+            server_choice.Failed(server);
             if (attempt + 1 < attempts) ++corrupt_retries;
             result = InstallError::kCorrupt;
           }
