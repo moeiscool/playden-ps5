@@ -537,6 +537,34 @@ void BorrowedDepotRefusedIsSkipped(const std::filesystem::path& root) {
   CHECK(Read(root / "data/level.dat") == "level-one");
 }
 
+// The servers are listed for the cell Steam assigned at this logon, else the stored one.
+void ListsServersForLogonCell(const std::filesystem::path& root) {
+  for (const std::uint32_t logon_cell : {14u, 0u}) {
+    auto world = MakeWorld();
+    auto hooks = world.Hooks();
+    const auto access = hooks.access;
+    hooks.access = [&](const StoredSession& session, std::uint32_t app, const std::vector<DepotRequest>& depots,
+                       const std::atomic<bool>& cancel) {
+      auto result = access(session, app, depots, cancel);
+      result.cell_id = logon_cell;
+      return result;
+    };
+    std::uint32_t listed_cell = 99;
+    const auto servers = hooks.servers;
+    hooks.servers = [&](std::uint32_t cell, const std::atomic<bool>& cancel, std::vector<ContentServer>* out) {
+      listed_cell = cell;
+      return servers(cell, cancel, out);
+    };
+    DepotInstaller installer(hooks);
+    std::atomic<bool> cancel{false};
+    StoredSession session;
+    session.cell_id = 5;
+    const auto outcome = installer.Run(session, Target(root / std::to_string(logon_cell)), cancel);
+    CHECK(outcome.error == InstallError::kNone);
+    CHECK(listed_cell == (logon_cell != 0 ? logon_cell : 5));
+  }
+}
+
 void TuningFileDefaultsAndValidation(const std::filesystem::path& root) {
   std::filesystem::create_directories(root);
   const auto path = (root / "tuning").string();
@@ -1205,6 +1233,7 @@ int main() {
   TuningFileDefaultsAndValidation(base / "tuning");
   ParallelMergedAndFullyResumed(base / "parallel-merged");
   BorrowedDepotRefusedIsSkipped(base / "borrowed-depot");
+  ListsServersForLogonCell(base / "logon-cell");
   CountsActualUsefulCompressedBytes(base / "actual-compressed");
   StorageFailureEndsStats(base / "storage-stats");
   StatsAndRemovalLogs(base / "removal");

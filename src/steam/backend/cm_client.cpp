@@ -214,6 +214,7 @@ class CmClient::Session {
   }
   bool usable() const { return fatal_ == CmError::kNone && !logged_off_ && !logon_pending_ && logon_; }
   std::int32_t heartbeat_seconds() const { return heartbeat_seconds_; }
+  std::uint32_t cell_id() const { return logon_ ? logon_->cell_id : 0; }
   // Steam's EResult for a refused logon, or for being logged off, when it sent one.
   std::optional<std::int32_t> logon_eresult() const {
     return logon_ ? std::optional<std::int32_t>(logon_->eresult) : std::nullopt;
@@ -834,6 +835,7 @@ DepotAccessResult CmClient::FetchDepotAccess(const StoredSession& stored, std::u
   if (const auto open = Acquire(stored, cancel, deadline, &lease); open != CmError::kNone)
     return finish(open);
   auto& session = lease.session;
+  result.cell_id = session->cell_id();
   for (const auto& depot : depots) {
     DepotGrant grant;
     grant.depot_id = depot.depot_id;

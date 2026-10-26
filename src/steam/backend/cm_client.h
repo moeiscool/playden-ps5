@@ -115,6 +115,7 @@ struct DepotAccessResult {
   std::vector<DepotGrant> grants;  // one per requested depot, in request order, except skipped ones
   std::vector<std::uint32_t> skipped;  // optional depots whose key the account was refused
   std::string detail;              // which step refused, with Steam's result code
+  std::uint32_t cell_id = 0;       // the content cell Steam assigned at logon; 0 when it sent none
   bool ok() const { return error == CmError::kNone; }
 };
 

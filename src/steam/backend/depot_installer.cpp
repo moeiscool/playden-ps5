@@ -493,7 +493,9 @@ InstallOutcome DepotInstaller::Run(const StoredSession& session, const InstallTa
   stats.access_ms = Milliseconds(Clock::now() - phase_start);
   phase_start = Clock::now();
   std::vector<ContentServer> servers;
-  const auto listed = hooks_.servers(session.cell_id.value_or(0), cancel, &servers);
+  // The cell from this logon picks the servers for the account's region, as the Steam client does.
+  const auto cell = access.cell_id != 0 ? access.cell_id : session.cell_id.value_or(0);
+  const auto listed = hooks_.servers(cell, cancel, &servers);
   if (listed == CdnError::kCanceled) return fail(InstallError::kCanceled, "canceled");
   if (listed != CdnError::kNone || servers.empty()) {
     outcome.error = InstallError::kNetwork;
