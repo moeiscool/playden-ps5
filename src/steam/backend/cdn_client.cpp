@@ -3,6 +3,7 @@
 #include "steam/backend/json.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace playden::steam {
 namespace {
@@ -91,6 +92,8 @@ CdnError CdnClient::Servers(std::uint32_t cell_id, const std::atomic<bool>& canc
     const auto* vhost = server.Find("vhost");
     const auto* https = server.Find("https_support");
     const auto* load = server.Find("load");
+    const auto* weighted = server.Find("weighted_load");
+    const auto* priority = server.Find("priority_class");
     if (!type || !type->is_string() || (type->text() != "SteamCache" && type->text() != "CDN")) continue;
     if (!host || !host->is_string() || !ValidCdnHost(host->text())) continue;
     ContentServer entry;
@@ -100,6 +103,14 @@ CdnError CdnClient::Servers(std::uint32_t cell_id, const std::atomic<bool>& canc
     if (load) {
       if (const auto value = load->AsUint64(); value && *value < 100000) entry.load = static_cast<int>(*value);
     }
+    if (weighted && weighted->is_number()) {
+      char* end = nullptr;
+      const double value = std::strtod(weighted->text().c_str(), &end);
+      if (end && *end == '\0' && value >= 0 && value < 1e9) entry.weighted_load = value;
+    }
+    if (priority) {
+      if (const auto value = priority->AsUint64(); value && *value < 1000) entry.priority_class = static_cast<int>(*value);
+    }
     (entry.https ? usable : plain).push_back(std::move(entry));
   }
   // Plain HTTP only when the directory offers nothing better.
@@ -108,8 +119,15 @@ CdnError CdnClient::Servers(std::uint32_t cell_id, const std::atomic<bool>& canc
     last_failure_ = "servers=" + std::to_string(listed) + " usable=0";
     return CdnError::kProtocol;
   }
-  std::stable_sort(usable.begin(), usable.end(),
-                   [](const ContentServer& left, const ContentServer& right) { return left.load < right.load; });
+  // A server without a weighted load ranks by its plain load.
+  const auto weight = [](const ContentServer& server) {
+    return server.weighted_load >= 0 ? server.weighted_load : static_cast<double>(server.load);
+  };
+  std::stable_sort(usable.begin(), usable.end(), [&](const ContentServer& left, const ContentServer& right) {
+    if (left.priority_class != right.priority_class) return left.priority_class < right.priority_class;
+    if (weight(left) != weight(right)) return weight(left) < weight(right);
+    return left.load < right.load;
+  });
   *out = std::move(usable);
   return CdnError::kNone;
 }

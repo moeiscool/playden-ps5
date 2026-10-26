@@ -17,6 +17,8 @@ struct ContentServer {
   std::string vhost;  // the name used in URLs and TLS
   int load = 100;
   bool https = true;  // false for a server the directory lists as plain HTTP only
+  double weighted_load = -1;   // the directory's load adjusted for distance; -1 when not listed
+  int priority_class = 0;      // lower is preferred; 0 when not listed
 };
 
 struct CdnStats {
@@ -41,7 +43,8 @@ class CdnClient {
   explicit CdnClient(Perform perform);  // tests
   ~CdnClient();
 
-  // Servers sorted by load, from IContentServerDirectoryService/GetServersForSteamPipe. When the
+  // Servers from IContentServerDirectoryService/GetServersForSteamPipe, best first as the Steam
+  // client ranks them: by priority class, then weighted load, then load. When the
   // list holds no usable server, last_failure() says how many were listed and why none fit.
   CdnError Servers(std::uint32_t cell_id, const std::atomic<bool>& cancel, std::vector<ContentServer>* out);
   CdnError Manifest(const ContentServer& server, std::uint32_t depot_id, std::uint64_t gid,

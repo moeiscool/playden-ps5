@@ -55,6 +55,28 @@ void ServersFilterAndSortByLoad() {
   assert(urls[0].rfind("https://", 0) == 0);
 }
 
+void ServersRankByPriorityThenWeightedLoad() {
+  CdnClient client([&](const HttpRequest&, const std::atomic<bool>&) {
+    return Body(200, R"({"response":{"servers":[
+      {"type":"CDN","host":"far.example.invalid","load":5,"weighted_load":240.5,"priority_class":1},
+      {"type":"CDN","host":"near.example.invalid","load":40,"weighted_load":60.25,"priority_class":1},
+      {"type":"CDN","host":"plain.example.invalid","load":50,"priority_class":1},
+      {"type":"CDN","host":"backup.example.invalid","load":0,"weighted_load":1,"priority_class":3},
+      {"type":"CDN","host":"odd.example.invalid","load":45,"weighted_load":"x","priority_class":1}]}})");
+  });
+  std::atomic<bool> cancel{false};
+  std::vector<ContentServer> servers;
+  assert(client.Servers(1, cancel, &servers) == CdnError::kNone);
+  assert(servers.size() == 5);
+  // Without a usable weighted load, a server ranks by its plain load (45, 50).
+  assert(servers[0].host == "odd.example.invalid" && servers[0].weighted_load == -1);
+  assert(servers[1].host == "plain.example.invalid");
+  // The weighted load ranks before the plain one: far has the lower load but is farther.
+  assert(servers[2].host == "near.example.invalid" && servers[2].weighted_load == 60.25);
+  assert(servers[3].host == "far.example.invalid");
+  assert(servers[4].host == "backup.example.invalid" && servers[4].priority_class == 3);
+}
+
 void PlainHttpServersWhenNoHttpsIsListed() {
   bool plain_allowed = true;
   CdnClient client([&](const HttpRequest& request, const std::atomic<bool>&) {
@@ -136,6 +158,7 @@ void PlainHttpServerUrls() {
 int main() {
   TotalsIncludeFailedRequests();
   ServersFilterAndSortByLoad();
+  ServersRankByPriorityThenWeightedLoad();
   PlainHttpServersWhenNoHttpsIsListed();
   EmptyServerListSaysWhy();
   ManifestAndChunkUrlsAndErrors();
