@@ -687,6 +687,69 @@ std::vector<LiveImportCandidate> fixture_import_candidates() {
 // The fixture's imported game (Night Sky, already added from the USB drive).
 GameId fixture_imported_game() { return GameId::Local("6d1f3a52-0c55-4f3e-9b2a-5d1c7e0a9f11"); }
 
+struct StartupProblem {
+    std::string title;
+    std::string subtitle;
+    bool show_detail = true;  // the error line, for reports; left out where it adds nothing for the player
+};
+
+// What the startup error means for the player: the step that failed and how to fix it. The error
+// itself stays on the screen as the detail line, for reports.
+StartupProblem describe_startup_problem(const std::string& detail, bool granted) {
+    const auto has = [&detail](const char* text) { return detail.find(text) != std::string::npos; };
+    const auto stage = [&detail](std::initializer_list<const char*> stages) {
+        for (const char* name : stages)
+            if (detail.find(std::string("helper stage=") + name + " ") != std::string::npos) return true;
+        return false;
+    };
+    const StartupProblem incomplete{"Playden's app folder is incomplete",
+        "Some of Playden's files in /data/homebrew are missing or can't be read. Copy the whole app folder from the "
+        "release zip again (or use tools/console_title_deploy.py), then open Playden again."};
+    constexpr const char* kElsewhere = "launcher is not installed in ";
+    if (const auto at = detail.find(kElsewhere); at != std::string::npos) {
+        const auto from = at + std::strlen(kElsewhere);
+        const auto folder = detail.substr(from, detail.find(';', from) - from);
+        const auto parent = folder.substr(0, folder.rfind('/'));
+        // ProsperoStore can install to other folders and drives; its labels are Settings > Install location and
+        // Uninstall (held) on the app's page.
+        return {"Install Playden on console storage",
+                "Playden runs only from " + folder + ", on the console's own storage. From ProsperoStore: set "
+                "Settings > Install location to " + parent + ", hold Uninstall on Playden's page, then install it "
+                "again. If you copied it by hand, move the app folder to " + parent + ".",
+                false};
+    }
+    if (granted) {
+        if (has("stable launcher source is invalid")) return incomplete;
+        if (has("stable launcher source identity does not match"))
+            return {"Playden can't start",
+                    "The Playden that started is not the copy in /data/homebrew. If you just copied a new version, "
+                    "restart the PS5; if it stays, copy the whole app folder to /data/homebrew again."};
+        return {"Playden can't start", "Playden has root access but can't use its data in /data/playden. "
+                                       "Restart Playden; if it stays, check that folder's permissions over FTP."};
+    }
+    if (has("launcher source is invalid") || has("launcher source identity is unavailable") ||
+        stage({"find-helper", "validate-helper", "open-helper", "stat-helper"}))
+        return incomplete;
+    if (stage({"network", "socket", "socket-options"}))
+        return {"Playden can't start", "The console's network did not start, and Playden needs it to ask for root "
+                                       "access. Restart the PS5, jailbreak it again, then open Playden again."};
+    if (stage({"stream-helper"}))
+        return {"Root access is missing",
+                "The ELF loader on port 9021 stopped while Playden sent it the root helper. Load the ELF loader "
+                "again, then open Playden again."};
+    if (stage({"connect"}))
+        return {"The ELF loader isn't running",
+                "Playden gets root access through the ELF loader (elfldr) on port 9021, and nothing answered there. "
+                "Load the ELF loader (most autoloaders start it), then open Playden again."};
+    if (has("helper stage="))
+        return {"Root access is missing",
+                "The ELF loader ran Playden's root helper, but the helper could not give Playden access. "
+                "Load kstuff and the autoloader, then open Playden again. If it stays, report the startup error "
+                "below with your firmware version."};
+    return {"Root access is missing", "Without it, Playden can't reach its data, so it can't show your games, "
+                                      "download or play. Load kstuff and the autoloader, then open Playden again."};
+}
+
 } // namespace
 
 std::string JobStateText(const Job& job) {
@@ -1770,6 +1833,18 @@ void Simulation::sync_self_update_job() {
 
 // The running version's release notes, with its release page as a QR code: once after an update
 // ("What's new"), and from Settings › About › Release notes.
+// The selected game changed under the dialogs: the ones about a game close, Playden's own update
+// dialogs (often opened at startup, before the library arrives) stay.
+void Simulation::close_game_modals() {
+    auto& modals = state_.navigation.modals;
+    modals.erase(std::remove_if(modals.begin(), modals.end(), [](const ModalEntry& modal) {
+        return std::none_of(modal.action_keys.begin(), modal.action_keys.end(), [](const std::string& key) {
+            return key == "self-update-install" || key == "self-update-restart" || key == "release-notes-ok" ||
+                   key == "kit-install";
+        });
+    }), modals.end());
+}
+
 void Simulation::open_release_notes(bool after_update) {
     const auto& update = state_.self_update;
     ModalEntry notes{"confirmation",
@@ -2453,12 +2528,12 @@ bool Simulation::UpdateLibrary(LibraryUpdate update) {
         } else if (!current_visible.empty()) {
             state_.navigation.selected_index = std::clamp(prior_index, 0, static_cast<int>(current_visible.size()) - 1);
             state_.navigation.selected_game_id = current_visible[static_cast<std::size_t>(state_.navigation.selected_index)]->id;
-            if (!state_.navigation.modals.empty()) state_.navigation.modals.clear();
+            close_game_modals();
             state_.editor.active = false;
         } else {
             state_.navigation.selected_index = 0;
             state_.navigation.selected_game_id = {};
-            state_.navigation.modals.clear();
+            close_game_modals();
             state_.editor.active = false;
         }
 
@@ -2505,6 +2580,11 @@ bool Simulation::UpdateLibrary(LibraryUpdate update) {
                                                             ? "details-play" : "details-install");
             }
         } else {
+            state_.navigation.focus_key = prior_focus;
+        }
+        // An update dialog that stayed open keeps the focus; the route's new focus is where it returns to.
+        if (prior_overlay && !identity_retained && !state_.navigation.modals.empty()) {
+            state_.navigation.modals.front().opener_focus_key = state_.navigation.focus_key;
             state_.navigation.focus_key = prior_focus;
         }
 
@@ -4465,16 +4545,10 @@ void Simulation::rebuild_view() {
         else if (modal.id == "installed-games") view_.legends = {"Cross Select", "Triangle Uninstall", "Circle Close"};
         else if (!modal.setting_id.empty()) view_.legends = {"Cross Select", "Triangle Reset", "L1/R1 Jump", "Circle Back"};
     } else if (state_.navigation.route == Route::Startup && state_.root_access_missing) {
-        if (state_.root_access_granted) {
-            view_.title = "Playden can't start";
-            view_.subtitle = "Playden has root access but can't use its data in /data/playden. "
-                             "Restart Playden; if it stays, check that folder's permissions over FTP.";
-        } else {
-            view_.title = "Root access is missing";
-            view_.subtitle = "Without it, Playden can't reach its data, so it can't show your games, download or play. "
-                             "Load kstuff and the autoloader, then open Playden again.";
-        }
-        if (!state_.root_access_detail.empty())
+        auto problem = describe_startup_problem(state_.root_access_detail, state_.root_access_granted);
+        view_.title = std::move(problem.title);
+        view_.subtitle = std::move(problem.subtitle);
+        if (problem.show_detail && !state_.root_access_detail.empty())
             row("root-detail", RowKind::Status, "Startup error: " + state_.root_access_detail, "").enabled = false;
         row("root-quit", RowKind::Action, "Quit to Home", "root-quit");
         view_.legends = {"Cross Quit to Home"};

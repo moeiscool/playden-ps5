@@ -956,6 +956,56 @@ void live_self_update(const std::filesystem::path& base) {
               updated.state().navigation.modals.back().link == fresh.current_notes_url,
           "update: the release notes open from Settings");
 
+    // The library arriving after the dialog opened (the cached list, then each store's) leaves it open.
+    {
+        auto late = make_live(base);
+        late.UpdateAccount({AuthState::SignedIn, "account", "Owner", {}, {}, false});
+        check(late.UpdateLibrary({{}, false, {}, false, true, 100}), "update: empty library delivered");
+        LiveSelfUpdate waiting;
+        waiting.current = "0.3.0";
+        waiting.finished_message = "Playden was updated to 0.3.0.";
+        waiting.whats_new = true;
+        late.UpdateSelfUpdate(waiting);
+        check(!late.state().navigation.modals.empty() &&
+                  late.state().navigation.modals.back().title == "What's new in Playden 0.3.0",
+              "update: what's new opens before the games arrive");
+        playden::GameSummary game;
+        game.id = SteamId(220);
+        game.title = "Half-Life 2";
+        check(late.UpdateLibrary({{game}, false, {}, false, true, 100}), "update: games delivered");
+        check(!late.state().navigation.modals.empty() &&
+                  late.state().navigation.modals.back().title == "What's new in Playden 0.3.0",
+              "update: the games arriving leave what's new open");
+    }
+
+    // The offer keeps its focus on Download when the selected game leaves the list under it.
+    {
+        auto offered = make_live(base);
+        offered.UpdateAccount({AuthState::SignedIn, "account", "Owner", {}, {}, false});
+        std::vector<playden::GameSummary> games;
+        for (int i = 0; i < 4; ++i) {
+            playden::GameSummary game;
+            game.id = SteamId(220 + i);
+            game.title = "Game " + std::to_string(i);
+            games.push_back(game);
+        }
+        check(offered.UpdateLibrary({games, false, {}, false, true, 100}), "update: four games delivered");
+        for (int i = 0; i < 3; ++i) offered.action("right");
+        LiveSelfUpdate available;
+        available.current = "0.2.0";
+        available.phase = "available";
+        available.available = "0.3.0";
+        offered.UpdateSelfUpdate(available);
+        check(!offered.state().navigation.modals.empty() &&
+                  offered.state().navigation.modals.back().title == "Playden 0.3.0 is available",
+              "update: the offer opens over the library");
+        games.pop_back();
+        games.erase(games.begin() + 2);
+        check(offered.UpdateLibrary({games, false, {}, false, true, 100}), "update: the selected game leaves");
+        check(offered.action("cross") && offered.TakeSelfUpdateRequests() == std::vector<std::string>{"install"},
+              "update: Download and install still has the focus");
+    }
+
     // A failed install says why; the previous run's result shows once.
     auto failing = make_live(base);
     failing.UpdateAccount({AuthState::SignedIn, "account", "Owner", {}, {}, false});
@@ -1046,6 +1096,56 @@ void live_root_access_missing() {
           "root access: the data failure keeps Quit to Home");
     check(!granted.action("connect") && granted.action("cross") && granted.state().quit_requested,
           "root access: the data failure only quits to Home");
+
+    // Each failed step has its own title and fix; the startup error stays as the detail line.
+    struct Case { const char* error; bool granted; const char* title; const char* advice; };
+    const Case cases[] = {
+        {"native data grant failed (code 2); helper stage=find-helper status=unavailable error=2", false,
+         "Playden's app folder is incomplete", "Copy the whole app folder"},
+        {"launcher source identity is unavailable", false, "Playden's app folder is incomplete", "release zip"},
+        {"launcher source is invalid: trust store is unavailable", false, "Playden's app folder is incomplete",
+         "console_title_deploy.py"},
+        {"native data grant failed (code 2); helper stage=open-helper status=unavailable error=2", false,
+         "Playden's app folder is incomplete", "Copy the whole app folder"},
+        {"native data grant failed (code 61); helper stage=connect status=unavailable error=61", false,
+         "The ELF loader isn't running", "port 9021"},
+        {"native data grant failed (code 50); helper stage=network status=unavailable error=50", false,
+         "Playden can't start", "network did not start"},
+        {"native data grant failed (code 55); helper stage=socket status=unavailable error=55", false,
+         "Playden can't start", "network did not start"},
+        {"native data grant failed (code 32); helper stage=stream-helper status=unavailable error=32", false,
+         "Root access is missing", "Load the ELF loader again"},
+        {"native data grant failed (code 60); helper stage=receive-prepare status=unavailable error=60", false,
+         "Root access is missing", "firmware version"},
+        {"native data grant failed (code 13); helper stage=helper-prepare status=6 error=1", false,
+         "Root access is missing", "Load kstuff and the autoloader"},
+        {"stable launcher source is invalid: assets root is unavailable", true, "Playden's app folder is incomplete",
+         "Copy the whole app folder"},
+        {"stable launcher source identity does not match", true, "Playden can't start", "restart the PS5"},
+        {"launcher is not installed in /data/homebrew/FAKE77031; helper stage=done status=0 error=0", true,
+         "Install Playden on console storage", "Playden runs only from /data/homebrew/FAKE77031, on the console's"},
+        {"launcher is not installed in /data/homebrew/FAKE77031", false, "Install Playden on console storage",
+         "set Settings > Install location to /data/homebrew, hold Uninstall"},
+        {"launcher is not installed in /data/homebrew/FAKE77031", false, "Install Playden on console storage",
+         "move the app folder to /data/homebrew."},
+    };
+    for (const auto& item : cases) {
+        Simulation model_case({}, {}, ModelMode::Live);
+        model_case.ShowRootAccessMissing(item.error, item.granted);
+        const auto& case_view = model_case.view();
+        const auto case_detail = std::find_if(case_view.rows.begin(), case_view.rows.end(),
+                                              [](const auto& row) { return row.key == "root-detail"; });
+        // The wrong-location screen says all there is to do; the others keep the error line for reports.
+        const bool elsewhere = item.title == std::string("Install Playden on console storage");
+        check(case_view.title == item.title && case_view.subtitle.find(item.advice) != std::string::npos &&
+                  (elsewhere ? case_detail == case_view.rows.end()
+                             : case_detail != case_view.rows.end() &&
+                                   case_detail->title == std::string("Startup error: ") + item.error),
+              (std::string("root access: ") + item.error + " has its own title and fix").c_str());
+        check(item.granted || std::string(item.advice) != "Load kstuff and the autoloader" ||
+                  case_view.subtitle.find("kstuff") != std::string::npos,
+              "root access: a helper failure keeps the kstuff advice");
+    }
 
     Simulation fixture({}, {}, ModelMode::Simulation);
     fixture.ShowRootAccessMissing(error);
