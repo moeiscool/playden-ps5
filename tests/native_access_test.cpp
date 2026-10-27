@@ -293,7 +293,34 @@ void InvalidOrMissingStableSourceNeverFallsBackAfterGrant() {
   const auto absent = missing_bootstrap.Prepare();
   CHECK(!absent.launcher_ready && !absent.runtime_ready);
   CHECK(absent.paths.title_root.empty());
-  CHECK(absent.error.find("stable") != std::string::npos);
+  // Installed elsewhere (another drive's homebrew folder): the error names where Playden must be.
+  CHECK(absent.granted && absent.error.find("launcher is not installed in /data/homebrew/FAKE77031") == 0);
+
+  // Seen before the grant: /data/homebrew is listed and has no folder for this title. The grant is
+  // not asked for (it does not answer for a title started from another folder).
+  auto elsewhere = OrdinaryLauncher();
+  elsewhere.paths["/data/homebrew"] = NativePathKind::kDirectory;
+  NativeAccessBootstrap elsewhere_bootstrap(Ops(elsewhere), Options());
+  const auto outside = elsewhere_bootstrap.Prepare();
+  CHECK(!outside.runtime_ready && !outside.granted && elsewhere.grants == 0);
+  CHECK(outside.error.find("launcher is not installed in /data/homebrew/FAKE77031") == 0);
+
+  // A normal install that is visible before the grant still asks for it.
+  auto visible = OrdinaryLauncher();
+  visible.paths["/data/homebrew"] = NativePathKind::kDirectory;
+  visible.paths[kStableRoot] = NativePathKind::kDirectory;
+  NativeAccessBootstrap visible_bootstrap(Ops(visible), Options());
+  const auto installed = visible_bootstrap.Prepare();
+  CHECK(installed.runtime_ready && installed.granted && visible.grants == 1);
+
+  // A folder that is there but incomplete is still that, not "installed elsewhere".
+  auto broken = OrdinaryLauncher();
+  broken.expose_stable_after_grant = false;
+  broken.paths[kStableRoot] = NativePathKind::kDirectory;
+  broken.identities[kStableRoot] = "playden-package-v1";
+  NativeAccessBootstrap broken_bootstrap(Ops(broken), Options());
+  const auto incomplete = broken_bootstrap.Prepare();
+  CHECK(!incomplete.launcher_ready && incomplete.error.find("stable launcher source is invalid") == 0);
 }
 
 void RetryIsIdempotentAndDoesNotResetStorage() {
@@ -313,14 +340,34 @@ void RetryIsIdempotentAndDoesNotResetStorage() {
         NativePathKind::kDirectory);
 }
 
+// A hand copy can leave the empty stubs out: the grant still runs, and startup makes them afterwards.
+// Only the fallback without the grant, which would write into them, needs them or an explicit fresh install.
 void MissingStateRequiresAnExplicitFreshInstall() {
   auto existing = OrdinaryLauncher();
   existing.paths.erase(std::string(kAppRoot) + "/playden-data");
+  existing.paths.erase(std::string(kAppRoot) + "/logs");
   NativeAccessBootstrap existing_bootstrap(Ops(existing), Options());
-  const auto rejected = existing_bootstrap.Prepare();
+  const auto granted = existing_bootstrap.Prepare();
+  CHECK(granted.launcher_ready && granted.runtime_ready && granted.error.empty());
+  CHECK(existing.grants == 1);
+
+  auto stable_missing = OrdinaryLauncher();
+  stable_missing.paths.erase(std::string(kAppRoot) + "/logs");
+  stable_missing.expose_stable_after_grant = false;
+  AddTree(stable_missing, kStableRoot, false);
+  stable_missing.identities[kStableRoot] = stable_missing.identities[kAppRoot];
+  NativeAccessBootstrap stable_missing_bootstrap(Ops(stable_missing), Options());
+  const auto stubless = stable_missing_bootstrap.Prepare();
+  CHECK(stubless.runtime_ready && stubless.paths.log_root == std::string(kStableRoot) + "/logs");
+  CHECK(stable_missing.grants == 1);
+
+  auto denied = OrdinaryLauncher();
+  denied.paths.erase(std::string(kAppRoot) + "/playden-data");
+  denied.grant_result = 2;
+  NativeAccessBootstrap denied_bootstrap(Ops(denied), Options());
+  const auto rejected = denied_bootstrap.Prepare();
   CHECK(!rejected.launcher_ready && !rejected.runtime_ready);
   CHECK(rejected.error.find("state") != std::string::npos);
-  CHECK(existing.grants == 0);
 
   auto fresh = OrdinaryLauncher();
   fresh.paths.erase(std::string(kAppRoot) + "/playden-data");
